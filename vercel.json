@@ -1,9 +1,3 @@
 {
-  "version": 2,
-  "outputDirectory": "public",
-  "functions": {
-    "api/merge.js": {
-      "maxDuration": 30
-    }
-  }
+  "version": 2
 }
