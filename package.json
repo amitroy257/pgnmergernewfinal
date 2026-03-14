@@ -1,0 +1,11 @@
+{
+  "name": "pgn-chapter-merger",
+  "version": "1.0.0",
+  "description": "Merges chapter-based chess opening PGN files into clean merged chapters",
+  "dependencies": {
+    "chess.js": "^1.0.0"
+  },
+  "engines": {
+    "node": "24.x"
+  }
+}
