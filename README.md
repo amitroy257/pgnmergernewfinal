@@ -5,4 +5,4 @@ All comments {...}, variations (...), and headers are preserved.
 Chapters titled Annotated/Model/Supplementary Games are left as-is.
 Illegal moves and malformed tokens are safely converted to comments — the tool never crashes.
 Output filename: <original name> merged.pgn
-![Screenshot] (https://github.com/amitroy257/pgnmergernewfinal/blob/main/images/Screenshot_20260315-064403.png?raw=true)
+![My Screenshot](images/Screenshot_20260315-064403.png)
