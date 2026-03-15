@@ -64,21 +64,14 @@ function hasRealMoves(movesText) {
   return movesText.replace(/\*/g, '').replace(/\s+/g, '').length > 0;
 }
 
-// ─── SAN VALIDATOR (no chess.js needed) ──────────────────────────────────────
-// We use a simple regex-based SAN validator.
-// We don't do full legality checking — we just check if a token LOOKS like a
-// valid SAN move. Illegal moves will still be included in the tree but this
-// prevents random words/numbers from being treated as moves.
+// ─── SAN VALIDATOR ───────────────────────────────────────────────────────────
 
 function looksLikeSan(tok) {
   if (!tok) return false;
-  // Castling
   if (/^O-O(-O)?[+#]?$/.test(tok)) return true;
-  // Pawn move: e4, exd5, e8=Q, exd8=Q+
-  if (/^[a-h][1-8]([+#])?$/.test(tok)) return true;
+  if (/^[a-h][1-8][+#]?$/.test(tok)) return true;
   if (/^[a-h]x[a-h][1-8](=[KQRBN])?[+#]?$/.test(tok)) return true;
   if (/^[a-h][1-8]?x?[a-h][1-8](=[KQRBN])?[+#]?$/.test(tok)) return true;
-  // Piece move: Nf3, Nxf3, N1f3, Nbf3, Nbxf3
   if (/^[KQRBN][a-h1-8]?[a-h1-8]?x?[a-h][1-8][+#]?$/.test(tok)) return true;
   return false;
 }
@@ -100,12 +93,15 @@ function tokenize(src) {
       continue;
     }
 
-    // Variation ( ... ) with nesting
+    // Variation ( ... ) with full nesting support
     if (src[i] === '(') {
       let depth = 0, j = i;
       while (j < src.length) {
         if (src[j] === '(') depth++;
-        else if (src[j] === ')') { depth--; if (depth === 0) { j++; break; } }
+        else if (src[j] === ')') {
+          depth--;
+          if (depth === 0) { j++; break; }
+        }
         j++;
       }
       tokens.push(src.slice(i, j));
@@ -172,7 +168,7 @@ function tokenize(src) {
 
 class MoveNode {
   constructor(san) {
-    this.san = san;       // null for root
+    this.san = san;
     this.comments = [];
     this.nags = [];
     this.children = [];
@@ -180,25 +176,23 @@ class MoveNode {
 }
 
 // ─── TREE PARSER ─────────────────────────────────────────────────────────────
+// FIX: variations now correctly branch from the node BEFORE the current move
+// by tracking a separate "branchPoint" that is updated each time a move is made
 
 function buildTree(movesText) {
   const root = new MoveNode(null);
-  const parentMap = new WeakMap();
-  parentMap.set(root, null);
 
   function parse(tokens, parentNode) {
     let cur = parentNode;
+    let branchPoint = parentNode; // the node to branch FROM for variations
 
     for (let i = 0; i < tokens.length; i++) {
       const tok = tokens[i];
 
-      // Termination markers
       if (/^(\*|1-0|0-1|1\/2-1\/2)$/.test(tok)) break;
-
-      // Move number — skip
       if (/^\d+\./.test(tok)) continue;
 
-      // Comment
+      // Comment — attach to current node
       if (tok.startsWith('{')) {
         const text = tok.slice(1, -1).trim();
         if (text && !cur.comments.includes(text)) cur.comments.push(text);
@@ -211,27 +205,25 @@ function buildTree(movesText) {
         continue;
       }
 
-      // Variation — parse against parent node
+      // Variation — branch from branchPoint (before cur's move)
       if (tok.startsWith('(')) {
         const inner = tok.slice(1, -1).trim();
         const innerToks = tokenize(inner);
-        const varParent = parentMap.get(cur) || parentNode;
-        parse(innerToks, varParent);
+        parse(innerToks, branchPoint);
         continue;
       }
 
       // SAN move
       if (looksLikeSan(tok)) {
         const san = tok.replace(/[!?]+$/, '');
+        branchPoint = cur; // remember where we branched from
         let child = cur.children.find(c => c.san === san);
         if (!child) {
           child = new MoveNode(san);
           cur.children.push(child);
-          parentMap.set(child, cur);
         }
         cur = child;
       }
-      // Unknown token — silently skip
     }
   }
 
@@ -257,9 +249,9 @@ function mergeTrees(target, source) {
 }
 
 // ─── SERIALIZE TREE → PGN ────────────────────────────────────────────────────
+// FIX: variations correctly re-state move number with ... when it's black's turn
 
 function serialize(node, moveNum, isBlack) {
-  // Root node
   if (!node.san) {
     if (node.children.length === 0) return '';
     let out = '';
@@ -270,8 +262,13 @@ function serialize(node, moveNum, isBlack) {
     return out.trim();
   }
 
-  let out = !isBlack ? `${moveNum}. ` : '';
+  // Write move number prefix
+  let out = '';
+  if (!isBlack) {
+    out += `${moveNum}. `;
+  }
   out += node.san;
+
   if (node.nags.length) out += ' ' + node.nags.join('');
   if (node.comments.length) out += ' ' + node.comments.map(c => `{${c}}`).join(' ');
 
@@ -282,15 +279,21 @@ function serialize(node, moveNum, isBlack) {
 
   const [main, ...vars] = node.children;
   out += ' ' + serialize(main, nextNum, nextIsBlack);
+
+  // FIX: variations branch from BEFORE this move, so they start at same moveNum/isBlack
   for (const v of vars) {
-    out += ` (${serialize(v, isBlack ? moveNum : moveNum, isBlack)})`;
+    // Variation starts at same position as current node's siblings
+    const varPrefix = isBlack ? `${moveNum}...` : `${moveNum}.`;
+    out += ` (${varPrefix} ${serialize(v, moveNum, isBlack)})`;
   }
+
   return out;
 }
 
 // ─── CHAPTER CLASSIFICATION ──────────────────────────────────────────────────
 
-const GAME_COLLECTION_RE = /annotated\s+games?|model\s+games?|supplementary\s+games?|\bgames\b/i;
+// Chapters that should NOT be merged (each game stays separate) but are kept
+const NO_MERGE_RE = /annotated\s+games?|model\s+games?|supplementary\s+games?/i;
 const PLACEHOLDER_RE = /^(\?+|unknown|\?+\.\?+\.\?+)$/i;
 
 function getChapterName(headers) {
@@ -303,7 +306,7 @@ function getChapterName(headers) {
 // ─── CORE MERGE PIPELINE ──────────────────────────────────────────────────────
 
 function mergeChapters(rawPgn) {
-  const chapterMap = new Map();
+  const chapterMap = new Map();   // name → { headers, root, noMerge }
   const chapterOrder = [];
 
   const gameTexts = splitGames(rawPgn);
@@ -319,11 +322,22 @@ function mergeChapters(rawPgn) {
     }
 
     const chapterName = getChapterName(headers);
+
+    // Skip truly unnamed games only
     if (chapterName === '?') continue;
-    if (GAME_COLLECTION_RE.test(chapterName)) continue;
 
     const movesText = extractMovesText(gt);
-    if (!hasRealMoves(movesText)) continue;
+    if (!hasRealMoves(movesText)) {
+      // Keep chapter even without moves (e.g. Introduction with just a comment)
+      if (!chapterMap.has(chapterName)) {
+        chapterMap.set(chapterName, { headers, root: new MoveNode(null), noMerge: false });
+        chapterOrder.push(chapterName);
+      }
+      continue;
+    }
+
+    // Annotated/Model games: keep as separate entries, don't merge lines together
+    const noMerge = NO_MERGE_RE.test(chapterName);
 
     let tree;
     try {
@@ -336,8 +350,13 @@ function mergeChapters(rawPgn) {
       }
     }
 
-    if (!chapterMap.has(chapterName)) {
-      chapterMap.set(chapterName, { headers, root: tree });
+    if (noMerge) {
+      // Each game gets its own unique key so nothing merges
+      const uniqueName = `${chapterName}__${chapterOrder.length}`;
+      chapterMap.set(uniqueName, { headers, root: tree, noMerge: true, displayName: chapterName });
+      chapterOrder.push(uniqueName);
+    } else if (!chapterMap.has(chapterName)) {
+      chapterMap.set(chapterName, { headers, root: tree, noMerge: false });
       chapterOrder.push(chapterName);
     } else {
       mergeTrees(chapterMap.get(chapterName).root, tree);
@@ -345,8 +364,9 @@ function mergeChapters(rawPgn) {
   }
 
   const out = [];
-  for (const name of chapterOrder) {
-    const { headers, root } = chapterMap.get(name);
+  for (const key of chapterOrder) {
+    const { headers, root, displayName } = chapterMap.get(key);
+    const name = displayName || key;
 
     const cleanHeaders = {
       Event: name,
