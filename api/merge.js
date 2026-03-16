@@ -288,7 +288,7 @@ function serialize(node, inVariation = false) {
   const showNumber = !node.isBlack || inVariation || node.comments.length > 0 || node.nags.length > 0;
 
   if (showNumber) {
-    out += node.isBlack ? `\( {node.moveNum}... ` : ` \){node.moveNum}. `;
+    out += node.isBlack ? `${node.moveNum}... ` : `${node.moveNum}. `;
   }
 
   out += node.san;
@@ -303,7 +303,7 @@ function serialize(node, inVariation = false) {
   // After comment or variation → force number on next black move if needed
   const nextNeedsNum = node.comments.length > 0 || vars.length > 0;
 
-  out += ' ' + serialize(main, false, nextNeedsNum && main.isBlack);
+  out += ' ' + serialize(main, false);
 
   for (const v of vars) {
     out += ` (${serialize(v, true)})`;
@@ -370,7 +370,7 @@ function mergeChapters(rawPgn) {
     }
 
     if (noMerge) {
-      const uniqueName = `\( {chapterName}__ \){chapterOrder.length}`;
+      const uniqueName = `${chapterName}__${chapterOrder.length}`;
       chapterMap.set(uniqueName, { headers, root: tree, noMerge: true, displayName: chapterName });
       chapterOrder.push(uniqueName);
     } else if (!chapterMap.has(chapterName)) {
@@ -398,12 +398,18 @@ function mergeChapters(rawPgn) {
 
     let block = '';
     for (const [k, v] of Object.entries(cleanHeaders)) {
-      block += `[\( {k} " \){v}"]\n`;
+      block += `[${k} "${v}"]\n`;
     }
     block += '\n';
 
     let movetext = '';
-    try { movetext = serialize(root, false); } catch (e) {}
+    try {
+      if (root && root instanceof MoveNode) {
+        movetext = serialize(root, false);
+      }
+    } catch (e) {
+      console.error('Serialization failed for chapter:', name, e);
+    }
     block += (movetext ? movetext + ' ' : '') + '*';
     out.push(block);
   }
